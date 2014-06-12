@@ -112,6 +112,8 @@ hash_source_code_string(
 	const char *path)
 {
 	int result = HASH_SOURCE_CODE_OK;
+	// TODO The result of this should also be cachable with the caching hash
+	// daemon.
 
 	/*
 	 * Check for __DATE__ and __TIME__ if the sloppiness configuration tells us
