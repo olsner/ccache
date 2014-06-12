@@ -20,8 +20,6 @@
 
 /* NOTE: This code makes no attempt to be fast! */
 
-static struct mdfour *m;
-
 #define MASK32 (0xffffffff)
 
 #define F(X,Y,Z) ((((X)&(Y)) | ((~(X))&(Z))))
@@ -35,7 +33,7 @@ static struct mdfour *m;
 
 /* this applies md4 to 64 byte chunks */
 static void
-mdfour64(uint32_t *M)
+mdfour64(struct mdfour *m, uint32_t *M)
 {
 	uint32_t AA, BB, CC, DD;
 	uint32_t A,B,C,D;
@@ -120,7 +118,7 @@ mdfour_begin(struct mdfour *md)
 }
 
 static
-void mdfour_tail(const unsigned char *in, size_t n)
+void mdfour_tail(struct mdfour *m, const unsigned char *in, size_t n)
 {
 	unsigned char buf[128] = { 0 };
 	uint32_t M[16];
@@ -136,13 +134,13 @@ void mdfour_tail(const unsigned char *in, size_t n)
 	if (n <= 55) {
 		copy4(buf+56, b);
 		copy64(M, buf);
-		mdfour64(M);
+		mdfour64(m, M);
 	} else {
 		copy4(buf+120, b);
 		copy64(M, buf);
-		mdfour64(M);
+		mdfour64(m, M);
 		copy64(M, buf+64);
-		mdfour64(M);
+		mdfour64(m, M);
 	}
 }
 
@@ -159,11 +157,9 @@ mdfour_update(struct mdfour *md, const unsigned char *in, size_t n)
 	}
 #endif
 
-	m = md;
-
 	if (!in) {
 		if (!md->finalized) {
-			mdfour_tail(md->tail, md->tail_len);
+			mdfour_tail(md, md->tail, md->tail_len);
 			md->finalized = 1;
 		}
 		return;
@@ -178,18 +174,18 @@ mdfour_update(struct mdfour *md, const unsigned char *in, size_t n)
 		in += len;
 		if (md->tail_len == 64) {
 			copy64(M, md->tail);
-			mdfour64(M);
-			m->totalN += 64;
+			mdfour64(md, M);
+			md->totalN += 64;
 			md->tail_len = 0;
 		}
 	}
 
 	while (n >= 64) {
 		copy64(M, in);
-		mdfour64(M);
+		mdfour64(md, M);
 		in += 64;
 		n -= 64;
-		m->totalN += 64;
+		md->totalN += 64;
 	}
 
 	if (n) {
