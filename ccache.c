@@ -2757,7 +2757,8 @@ ccache_main_options(int argc, char *argv[])
 	char *errmsg;
 
 	enum longopts {
-		DUMP_MANIFEST
+		DUMP_MANIFEST,
+		HASH_DAEMON,
 	};
 	static const struct option options[] = {
 		{"cleanup",       no_argument,       0, 'c'},
@@ -2771,13 +2772,20 @@ ccache_main_options(int argc, char *argv[])
 		{"show-stats",    no_argument,       0, 's'},
 		{"version",       no_argument,       0, 'V'},
 		{"zero-stats",    no_argument,       0, 'z'},
+		{"hash-daemon",   no_argument,       0, HASH_DAEMON},
 		{0, 0, 0, 0}
 	};
 
 	while ((c = getopt_long(argc, argv, "cChF:M:o:psVz", options, NULL)) != -1) {
 		switch (c) {
 		case DUMP_MANIFEST:
+			initialize();
 			manifest_dump(optarg, stdout);
+			break;
+
+		case HASH_DAEMON:
+			initialize();
+			hash_daemon(conf);
 			break;
 
 		case 'c': /* --cleanup */

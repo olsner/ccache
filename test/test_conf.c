@@ -368,6 +368,7 @@ TEST(conf_print_items)
 		"td",
 		022,
 		true,
+		false,
 		NULL
 	};
 	size_t n = 0;

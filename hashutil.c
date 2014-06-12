@@ -17,9 +17,13 @@
  */
 
 #include "ccache.h"
+#include "hashtable.h"
 #include "hashutil.h"
 #include "murmurhashneutral2.h"
 #include "macroskip.h"
+
+#include <sys/socket.h>
+#include <sys/un.h>
 
 unsigned
 hash_from_string(void *str)
@@ -120,7 +124,7 @@ hash_source_code_string(
 	/*
 	 * Hash the source string.
 	 */
-	hash_buffer(hash, str, len);
+	hash_file(hash, path);
 
 	if (result & HASH_SOURCE_CODE_FOUND_DATE) {
 		/*
@@ -159,6 +163,8 @@ hash_source_code_file(struct conf *conf, struct mdfour *hash, const char *path)
 {
 	char *data;
 	size_t size;
+
+	cc_log("hash_source_code_file %s", path);
 
 	if (is_precompiled_header(path)) {
 		if (hash_file(hash, path)) {
@@ -236,7 +242,7 @@ hash_command_output(struct mdfour *hash, const char *command,
 		return false;
 	}
 	fd = _open_osfhandle((intptr_t) pipe_out[0], O_BINARY);
-	ok = hash_fd(hash, fd);
+	ok = hash_fd_raw(hash, fd);
 	if (!ok) {
 		cc_log("Error hashing compiler check command output: %s", strerror(errno));
 		stats_update(STATS_COMPCHECK);
@@ -275,7 +281,7 @@ hash_command_output(struct mdfour *hash, const char *command,
 		bool ok;
 		args_free(args);
 		close(pipefd[1]);
-		ok = hash_fd(hash, pipefd[0]);
+		ok = hash_fd_raw(hash, pipefd[0]);
 		if (!ok) {
 			cc_log("Error hashing compiler check command output: %s", strerror(errno));
 			stats_update(STATS_COMPCHECK);
@@ -313,3 +319,212 @@ hash_multicommand_output(struct mdfour *hash, const char *commands,
 	free(command_string);
 	return ok;
 }
+
+void
+perror_die(const char *msg)
+{
+	perror(msg);
+	abort();
+}
+
+struct msg
+{
+	uint8_t cmd;
+	union
+	{
+		struct {
+			bool success;
+			unsigned char hash[16];
+		} hash_reply;
+		char path[512];
+	};
+};
+
+enum cmd
+{
+	// Update mdfour with the contents of the file at the given path.
+	// The reply is a CMD_HASH_FILE with an update mdfour member.
+	CMD_HASH_FILE,
+	// We hashed a file, store the hash in the hash-cache.
+	CMD_ADD_HASH,
+};
+
+static struct hashtable *hash_cache;
+static unsigned hash_hits, hash_misses;
+
+bool
+s_cmd(struct msg *msg, struct conf *conf)
+{
+	switch (msg->cmd)
+	{
+	case CMD_HASH_FILE:
+	{
+		unsigned char buf[16];
+		const unsigned char *existing;
+
+		// Planning to add some configury for how paranoid to be about things
+		// in hash-cache. (e.g. check mtime (want to avoid the stat), check
+		// mtime + inode + stuff, randomized rechecks.) For now, trust that
+		// anything in cache will stay valid until the user kills the daemon.
+		(void)conf;
+
+		existing = hashtable_search(hash_cache, msg->path);
+		if (existing)
+		{
+			//fprintf(stderr, "Found hash of %s in cache\n", msg->path);
+			hash_hits++;
+			msg->hash_reply.success = true;
+			memcpy(msg->hash_reply.hash, existing, 16);
+			return true;
+		}
+
+		// TODO Just give a negative response, let the client hash the file and
+		// add it using CMD_ADD_HASH
+		char *path = x_strdup(msg->path);
+		hash_misses++;
+		msg->hash_reply.success = hash_file_raw(path, buf);
+		memcpy(msg->hash_reply.hash, buf, sizeof(buf));
+		hashtable_insert(hash_cache, path, x_strdup((const char*)buf));
+		return true;
+	}
+	default:
+		return false;
+	}
+}
+
+bool
+hash_daemon(struct conf *conf)
+{
+	int s, c, res;
+	struct sockaddr_un addr;
+
+	hash_cache = create_hashtable(1000, hash_from_string, strings_equal);
+
+	addr.sun_family = AF_UNIX;
+	// Achtung: The cache_dir can be long, and sun_path can be as short as 100
+	// bytes.
+	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/hash_daemon", conf->cache_dir);
+	fprintf(stderr, "hash daemon on %s\n", addr.sun_path);
+	unlink(addr.sun_path);
+	s = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	if (s == -1) perror_die("socket");
+	res = bind(s, &addr, sizeof(addr));
+	if (res) perror_die("bind");
+	res = listen(s, 5);
+	if (res) perror_die("listen");
+
+	while ((c = accept(s, NULL, NULL)) != -1) {
+		struct msghdr hdr;
+		struct iovec iov;
+		struct msg msg;
+		struct conf client_conf = *conf;
+
+		memset(&hdr, 0, sizeof(hdr));
+		memset(&msg, 0, sizeof(msg));
+		iov.iov_base = &msg;
+		iov.iov_len = sizeof(msg);
+		hdr.msg_iov = &iov;
+		hdr.msg_iovlen = 1;
+
+		while ((res = recvmsg(c, &hdr, 0)) > 0)
+		{
+			//assert(hdr.msg_flags & MSG_EOR);
+			if (!s_cmd(&msg, &client_conf))
+			{
+				break;
+			}
+			res = sendmsg(c, &hdr, 0);
+			if (res < 0) perror_die("sendmsg");
+		}
+
+		fprintf(stderr, "cache hit/miss: %u/%u\n", hash_hits, hash_misses);
+
+		close(c);
+		c = -1;
+	}
+	perror("accept");
+	return false;
+}
+
+bool
+c_cmd(int fd, struct msg *msg)
+{
+	int res;
+	struct iovec iov;
+	struct msghdr hdr;
+
+	memset(&hdr, 0, sizeof(hdr));
+	iov.iov_base = msg;
+	iov.iov_len = sizeof(struct msg);
+	hdr.msg_iov = &iov;
+	hdr.msg_iovlen = 1;
+	res = sendmsg(fd, &hdr, 0);
+	if (res < 0) return false;
+	res = recvmsg(fd, &hdr, 0);
+	return res > 0;
+}
+
+static int hash_daemon_fd;
+
+bool init_hash_client(struct conf *conf)
+{
+	if (hash_daemon_fd) {
+		return true;
+	}
+
+	int s, res;
+	struct sockaddr_un addr;
+
+	hash_cache = create_hashtable(1000, hash_from_string, strings_equal);
+
+	addr.sun_family = AF_UNIX;
+	// Achtung: The cache_dir can be long, and sun_path can be as short as 100
+	// bytes.
+	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/hash_daemon", conf->cache_dir);
+	//fprintf(stderr, "hash daemon on %s\n", addr.sun_path);
+	s = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	if (s <= 0) {
+		return false;
+	}
+	res = connect(s, &addr, sizeof(addr));
+	if (res < 0) {
+		close(s);
+		conf->use_hash_daemon = false;
+	}
+	hash_daemon_fd = s;
+	return true;
+}
+
+bool
+hash_file_raw(const char *fname, unsigned char *buf)
+{
+	extern struct conf *conf;
+	int fd;
+	struct mdfour md;
+
+	if (conf->use_hash_daemon)
+	{
+		struct msg msg;
+		msg.cmd = CMD_HASH_FILE;
+		strcpy(msg.path, fname);
+		if (init_hash_client(conf) && c_cmd(hash_daemon_fd, &msg))
+		{
+			memcpy(buf, msg.hash_reply.hash, 16);
+			return msg.hash_reply.success;
+		}
+	}
+
+	fd = open(fname, O_RDONLY|O_BINARY);
+	if (fd == -1) {
+		return false;
+	}
+
+	mdfour_begin(&md);
+	if (!hash_fd_raw(&md, fd)) {
+		return false;
+	}
+	hash_result_as_bytes(&md, buf);
+	// Report hash to hash daemon for caching.
+	return true;
+}
+

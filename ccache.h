@@ -105,8 +105,17 @@ void hash_delimiter(struct mdfour *md, const char *type);
 void hash_string(struct mdfour *md, const char *s);
 void hash_string_length(struct mdfour *md, const char *s, int length);
 void hash_int(struct mdfour *md, int x);
+/* File hash functions don't add the file data directly, but hash it to an
+ * inner checksum, then add that checksum into the outer checksum. This allows
+ * the hash daemon to calculate and cache file checksums separately. */
 bool hash_fd(struct mdfour *md, int fd);
 bool hash_file(struct mdfour *md, const char *fname);
+/* Indirect checksum for a file already loaded into a buffer. */
+void hash_file_string(struct mdfour *md, const void *s, size_t len);
+/* Similar to the above but actually add all the bytes to the given mdfour.
+ * Used internally by those functions and by the hash daemon. */
+bool hash_fd_raw(struct mdfour *md, int fd);
+bool hash_file_raw(const char *fname, unsigned char *buf);
 
 /* ------------------------------------------------------------------------- */
 /* util.c */

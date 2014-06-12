@@ -43,6 +43,10 @@ init_log(void)
 	if (logfile) {
 		return true;
 	}
+	if (!conf) {
+		logfile = stderr;
+		return true;
+	}
 	assert(conf);
 	if (str_eq(conf->log_file, "")) {
 		return false;

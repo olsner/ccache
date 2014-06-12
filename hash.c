@@ -100,7 +100,7 @@ hash_int(struct mdfour *md, int x)
  * false.
  */
 bool
-hash_fd(struct mdfour *md, int fd)
+hash_fd_raw(struct mdfour *md, int fd)
 {
 	char buf[16384];
 	ssize_t n;
@@ -116,6 +116,22 @@ hash_fd(struct mdfour *md, int fd)
 	return n == 0;
 }
 
+bool
+hash_fd(struct mdfour *md, int fd)
+{
+	struct mdfour temp;
+	unsigned char buf[16];
+
+	mdfour_begin(&temp);
+	if (!hash_fd_raw(&temp, fd))
+	{
+		return false;
+	}
+	hash_result_as_bytes(&temp, (unsigned char*)buf);
+	hash_buffer(md, buf, sizeof(buf));
+	return true;
+}
+
 /*
  * Add contents of a file to the hash. Returns true on success, otherwise
  * false.
@@ -123,15 +139,23 @@ hash_fd(struct mdfour *md, int fd)
 bool
 hash_file(struct mdfour *md, const char *fname)
 {
-	int fd;
-	bool ret;
+	unsigned char buf[16];
 
-	fd = open(fname, O_RDONLY|O_BINARY);
-	if (fd == -1) {
+	if (!hash_file_raw(fname, buf)) {
 		return false;
 	}
+	hash_buffer(md, buf, sizeof(buf));
+	return true;
+}
 
-	ret = hash_fd(md, fd);
-	close(fd);
-	return ret;
+void
+hash_file_string(struct mdfour *md, const void *data, size_t length)
+{
+	struct mdfour temp;
+	unsigned char buf[16];
+
+	mdfour_begin(&temp);
+	hash_buffer(&temp, data, length);
+	hash_result_as_bytes(&temp, (unsigned char*)buf);
+	hash_buffer(md, buf, sizeof(buf));
 }

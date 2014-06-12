@@ -1,4 +1,4 @@
-/* ANSI-C code produced by gperf version 3.0.3 */
+/* ANSI-C code produced by gperf version 3.0.4 */
 /* Command-line: gperf envtoconfitems.gperf  */
 /* Computed positions: -k'1,5' */
 
@@ -54,7 +54,7 @@ envtoconfitems_hash (register const char *str, register unsigned int len)
       43, 43, 43, 43, 43, 43,  5,  0,  0, 10,
       20, 43, 15, 43, 10, 43, 20, 10, 15,  0,
        5,  5,  5,  0,  0,  5, 43, 43, 43, 43,
-       0, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+       0, 43, 43, 43, 43, 43,  0, 43, 43, 43,
       43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
       43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
       43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
@@ -89,10 +89,9 @@ envtoconfitems_hash (register const char *str, register unsigned int len)
   return hval;
 }
 
-static
 #ifdef __GNUC__
 __inline
-#ifdef __GNUC_STDC_INLINE__
+#if defined __GNUC_STDC_INLINE__ || defined __GNUC_GNU_INLINE__
 __attribute__ ((__gnu_inline__))
 #endif
 #endif
@@ -101,7 +100,7 @@ envtoconfitems_get (register const char *str, register unsigned int len)
 {
   enum
     {
-      TOTAL_KEYWORDS = 26,
+      TOTAL_KEYWORDS = 27,
       MIN_WORD_LENGTH = 2,
       MAX_WORD_LENGTH = 13,
       MIN_HASH_VALUE = 2,
@@ -154,7 +153,8 @@ envtoconfitems_get (register const char *str, register unsigned int len)
       {"",""},
 #line 21 "envtoconfitems.gperf"
       {"EXTRAFILES", "extra_files_to_hash"},
-      {"",""},
+#line 37 "envtoconfitems.gperf"
+      {"HASH_DAEMON", "hash_daemon"},
 #line 26 "envtoconfitems.gperf"
       {"MAXSIZE", "max_size"},
 #line 25 "envtoconfitems.gperf"
@@ -189,4 +189,4 @@ envtoconfitems_get (register const char *str, register unsigned int len)
     }
   return 0;
 }
-static const size_t ENVTOCONFITEMS_TOTAL_KEYWORDS = 26;
+static const size_t ENVTOCONFITEMS_TOTAL_KEYWORDS = 27;

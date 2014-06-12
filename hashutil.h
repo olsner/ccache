@@ -32,4 +32,6 @@ bool hash_command_output(struct mdfour *hash, const char *command,
 bool hash_multicommand_output(struct mdfour *hash, const char *command,
                               const char *compiler);
 
+bool hash_daemon(struct conf *conf);
+
 #endif

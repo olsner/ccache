@@ -30,6 +30,7 @@ struct conf {
 	char *temporary_dir;
 	unsigned umask;
 	bool unify;
+	bool use_hash_daemon;
 
 	const char **item_origins;
 };
