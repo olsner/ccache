@@ -18,6 +18,8 @@
 
 #include "ccache.h"
 
+#if 0
+
 /* NOTE: This code makes no attempt to be fast! */
 
 #define MASK32 (0xffffffff)
@@ -202,3 +204,5 @@ mdfour_result(struct mdfour *md, unsigned char *out)
 	copy4(out+8, md->C);
 	copy4(out+12, md->D);
 }
+
+#endif

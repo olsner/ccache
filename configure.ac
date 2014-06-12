@@ -122,6 +122,9 @@ else
     extra_ldflags="-lz"
 fi
 
+AC_CHECK_LIB(crypto, MD4_Init, true)
+extra_ldflags="-lcrypto $extra_ldflags"
+
 AC_C_BIGENDIAN
 
 AC_C_INLINE
