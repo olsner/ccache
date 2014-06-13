@@ -401,6 +401,7 @@ hash_daemon(struct conf *conf)
 	struct sockaddr_un addr;
 
 	hash_cache = create_hashtable(1000, hash_from_string, strings_equal);
+	assert(!conf->use_hash_daemon);
 
 	addr.sun_family = AF_UNIX;
 	// Achtung: The cache_dir can be long, and sun_path can be as short as 100
@@ -501,8 +502,9 @@ bool
 hash_file_raw(const char *fname, unsigned char *buf)
 {
 	extern struct conf *conf;
-	int fd;
+	int fd = -1;
 	struct mdfour md;
+	bool res;
 
 	if (conf->use_hash_daemon)
 	{
@@ -512,21 +514,27 @@ hash_file_raw(const char *fname, unsigned char *buf)
 		if (init_hash_client(conf) && c_cmd(hash_daemon_fd, &msg))
 		{
 			memcpy(buf, msg.hash_reply.hash, 16);
-			return msg.hash_reply.success;
+			res = msg.hash_reply.success;
+			// If hash daemon didn't work, fall back to hashing locally.
+			if (res) goto out;
 		}
 	}
 
 	fd = open(fname, O_RDONLY|O_BINARY);
 	if (fd == -1) {
-		return false;
+		fprintf(stderr, "ccache: Failed to open %s: %s\n", fname, strerror(errno));
+		res = false;
+		goto out;
 	}
 
 	mdfour_begin(&md);
-	if (!hash_fd_raw(&md, fd)) {
-		return false;
-	}
+	res = hash_fd_raw(&md, fd);
 	hash_result_as_bytes(&md, buf);
-	// Report hash to hash daemon for caching.
-	return true;
+	if (res && conf->use_hash_daemon && init_hash_client(conf))
+	{
+	}
+out:
+	if (fd != -1) close(fd);
+	return res;
 }
 
