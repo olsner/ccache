@@ -523,12 +523,17 @@ hash_file_raw(const char *fname, unsigned char *buf)
 	int fd = -1;
 	struct mdfour md;
 	bool res;
+	char *real_path = x_realpath(fname);
 
 	if (conf->use_hash_daemon)
 	{
+		// FIXME This only works where x_realpath uses a real realpath (which
+		// produces absolute paths), instead of the fallback code which
+		// doesn't. May need to explicitly involve current_working_dir.
+		//extern char *current_working_dir;
 		struct msg msg;
 		msg.cmd = CMD_HASH_FILE;
-		strcpy(msg.path, fname);
+		strcpy(msg.path, real_path);
 		if (init_hash_client(conf) && c_cmd(hash_daemon_fd, &msg))
 		{
 			memcpy(buf, msg.hash_reply.hash, 16);
@@ -553,6 +558,7 @@ hash_file_raw(const char *fname, unsigned char *buf)
 	}
 out:
 	if (fd != -1) close(fd);
+	free(real_path);
 	return res;
 }
 
