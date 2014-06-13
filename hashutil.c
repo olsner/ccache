@@ -339,6 +339,10 @@ struct msg
 			unsigned char hash[16];
 		} hash_reply;
 		char path[512];
+		struct {
+			char path[512];
+			unsigned char hash[16];
+		} add_hash;
 	};
 };
 
@@ -355,13 +359,12 @@ static struct hashtable *hash_cache;
 static unsigned hash_hits, hash_misses;
 
 bool
-s_cmd(struct msg *msg, struct conf *conf)
+s_cmd(struct msg *msg, const struct conf *conf)
 {
 	switch (msg->cmd)
 	{
 	case CMD_HASH_FILE:
 	{
-		unsigned char buf[16];
 		const unsigned char *existing;
 
 		// Planning to add some configury for how paranoid to be about things
@@ -380,16 +383,31 @@ s_cmd(struct msg *msg, struct conf *conf)
 			return true;
 		}
 
-		// TODO Just give a negative response, let the client hash the file and
-		// add it using CMD_ADD_HASH
-		char *path = x_strdup(msg->path);
 		hash_misses++;
-		msg->hash_reply.success = hash_file_raw(path, buf);
-		memcpy(msg->hash_reply.hash, buf, sizeof(buf));
-		hashtable_insert(hash_cache, path, x_strdup((const char*)buf));
+
+		// Just give a negative response, let the client hash the file and
+		// add it using CMD_ADD_HASH
+#if 1
+		msg->hash_reply.success = false;
+#else
+		char *path = x_strdup(msg->path);
+		msg->hash_reply.success = hash_file_raw(path, msg->hash_reply.hash);
+		hashtable_insert(hash_cache, path, x_strndup((const char*)buf, 16));
+#endif
 		return true;
 	}
+	case CMD_ADD_HASH:
+	{
+		if (!hashtable_search(hash_cache, msg->add_hash.path))
+		{
+			char *path = x_strndup(msg->add_hash.path, sizeof(msg->add_hash.path));
+			char *hash = x_strndup((const char *)msg->add_hash.hash, sizeof(msg->add_hash.hash));
+			hashtable_insert(hash_cache, path, hash);
+		}
+		return false;
+	}
 	default:
+		fprintf(stderr, "Unknown/unhandled command %u", msg->cmd);
 		return false;
 	}
 }
