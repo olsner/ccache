@@ -545,7 +545,7 @@ hash_file_raw(const char *fname, unsigned char *buf)
 
 	fd = open(fname, O_RDONLY|O_BINARY);
 	if (fd == -1) {
-		fprintf(stderr, "ccache: Failed to open %s: %s\n", fname, strerror(errno));
+		//fprintf(stderr, "ccache: Failed to open %s: %s\n", fname, strerror(errno));
 		res = false;
 		goto out;
 	}
@@ -555,6 +555,11 @@ hash_file_raw(const char *fname, unsigned char *buf)
 	hash_result_as_bytes(&md, buf);
 	if (res && conf->use_hash_daemon && init_hash_client(conf))
 	{
+		struct msg msg;
+		msg.cmd = CMD_ADD_HASH;
+		strcpy(msg.add_hash.path, real_path);
+		memcpy(msg.add_hash.hash, buf, 16);
+		send(hash_daemon_fd, &msg, sizeof(msg), 0);
 	}
 out:
 	if (fd != -1) close(fd);
