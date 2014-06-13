@@ -415,8 +415,9 @@ s_cmd(struct msg *msg, const struct conf *conf)
 bool
 hash_daemon(struct conf *conf)
 {
-	int s, c, res;
+	int s, res;
 	struct sockaddr_un addr;
+	socklen_t addrlen = sizeof(addr);
 
 	hash_cache = create_hashtable(1000, hash_from_string, strings_equal);
 	assert(!conf->use_hash_daemon);
@@ -427,41 +428,48 @@ hash_daemon(struct conf *conf)
 	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/hash_daemon", conf->cache_dir);
 	fprintf(stderr, "hash daemon on %s\n", addr.sun_path);
 	unlink(addr.sun_path);
-	s = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	s = socket(PF_UNIX, SOCK_DGRAM, 0);
 	if (s == -1) perror_die("socket");
-	res = bind(s, &addr, sizeof(addr));
+	res = bind(s, &addr, addrlen);
 	if (res) perror_die("bind");
-	res = listen(s, 5);
-	if (res) perror_die("listen");
 
-	while ((c = accept(s, NULL, NULL)) != -1) {
-		struct msghdr hdr;
-		struct iovec iov;
-		struct msg msg;
-		struct conf client_conf = *conf;
+	struct msghdr hdr;
+	struct iovec iov;
+	struct msg msg;
 
-		memset(&hdr, 0, sizeof(hdr));
-		memset(&msg, 0, sizeof(msg));
-		iov.iov_base = &msg;
-		iov.iov_len = sizeof(msg);
-		hdr.msg_iov = &iov;
-		hdr.msg_iovlen = 1;
+	memset(&hdr, 0, sizeof(hdr));
+	memset(&msg, 0, sizeof(msg));
+	iov.iov_base = &msg;
+	iov.iov_len = sizeof(msg);
+	hdr.msg_iov = &iov;
+	hdr.msg_iovlen = 1;
+	memset(&addr, 0, sizeof(addr));
 
-		while ((res = recvmsg(c, &hdr, 0)) > 0)
+	time_t last_stat = time(NULL);
+
+	while ((addrlen = sizeof(addr), res = recvfrom(s, &msg, sizeof(msg), 0, &addr, &addrlen)) > 0) {
+		assert(addr.sun_family == AF_UNIX);
+		//fprintf(stderr, "addr=%s addrlen=%d\n", addr.sun_path, addrlen);
+		if (!s_cmd(&msg, conf))
 		{
-			//assert(hdr.msg_flags & MSG_EOR);
-			if (!s_cmd(&msg, &client_conf))
-			{
+			continue;
+		}
+		int n = 5;
+		while (n--) {
+			res = sendto(s, &msg, sizeof(msg), MSG_DONTWAIT, &addr, addrlen);
+			if (res > 0)
+				break;
+			else if (errno != EAGAIN) {
+				perror("sendto");
 				break;
 			}
-			res = sendmsg(c, &hdr, 0);
-			if (res < 0) perror_die("sendmsg");
 		}
+		if (res < 0) continue;
 
-		fprintf(stderr, "cache hit/miss: %u/%u\n", hash_hits, hash_misses);
-
-		close(c);
-		c = -1;
+		if (last_stat != time(NULL)) {
+			time(&last_stat);
+			fprintf(stderr, "cache hit/miss: %u/%u\n", hash_hits, hash_misses);
+		}
 	}
 	perror("accept");
 	return false;
@@ -481,8 +489,20 @@ c_cmd(int fd, struct msg *msg)
 	hdr.msg_iovlen = 1;
 	res = sendmsg(fd, &hdr, 0);
 	if (res < 0) return false;
-	res = recvmsg(fd, &hdr, 0);
-	return res > 0;
+	unsigned t = 1;
+	unsigned n = 0;
+	do
+	{
+		res = recvmsg(fd, &hdr, 0);
+		if (res > 0) return true;
+		if (errno != EAGAIN) { perror("recvmsg"); return false; }
+		usleep(t);
+		t *= 2;
+	}
+	while (n++ < 10);
+	// TODO Record with statistics code
+	fprintf(stderr, "hash-daemon didn't respond, hashing locally\n");
+	return false;
 }
 
 static int hash_daemon_fd;
@@ -503,14 +523,23 @@ bool init_hash_client(struct conf *conf)
 	// bytes.
 	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/hash_daemon", conf->cache_dir);
 	//fprintf(stderr, "hash daemon on %s\n", addr.sun_path);
-	s = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	s = socket(AF_UNIX, SOCK_DGRAM, 0);
 	if (s <= 0) {
+		perror_die("socket");
 		return false;
 	}
 	res = connect(s, &addr, sizeof(addr));
 	if (res < 0) {
-		close(s);
-		conf->use_hash_daemon = false;
+		perror_die("connect");
+	}
+#if 0
+	strcpy(addr.sun_path, "/tmp/ccache.XXXXXX");
+	mkstemp(addr.sun_path);
+	unlink(addr.sun_path);
+#endif
+	res = bind(s, &addr, sizeof(sa_family_t)); // Linux-specific: autobind feature
+	if (res < 0) {
+		perror_die("bind");
 	}
 	hash_daemon_fd = s;
 	return true;
