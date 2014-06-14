@@ -24,6 +24,7 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <uv.h>
 
 unsigned
 hash_from_string(void *str)
@@ -412,97 +413,171 @@ s_cmd(struct msg *msg, const struct conf *conf)
 	}
 }
 
+static uv_loop_t *loop;
+static void on_new_connection(uv_stream_t *server, int status);
+static void write_cb(uv_write_t* req, int status);
+static time_t last_stat;
+
 bool
 hash_daemon(struct conf *conf)
 {
-	int s, res;
-	struct sockaddr_un addr;
-	socklen_t addrlen = sizeof(addr);
+	loop = uv_default_loop();
+	int res;
 
 	hash_cache = create_hashtable(1000, hash_from_string, strings_equal);
 	assert(!conf->use_hash_daemon);
 
-	addr.sun_family = AF_UNIX;
-	// Achtung: The cache_dir can be long, and sun_path can be as short as 100
-	// bytes.
-	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/hash_daemon", conf->cache_dir);
-	fprintf(stderr, "hash daemon on %s\n", addr.sun_path);
-	unlink(addr.sun_path);
-	s = socket(PF_UNIX, SOCK_DGRAM, 0);
-	if (s == -1) perror_die("socket");
-	res = bind(s, &addr, addrlen);
-	if (res) perror_die("bind");
+	uv_pipe_t server;
+	uv_pipe_init(loop, &server, 0);
 
-	struct msghdr hdr;
-	struct iovec iov;
+	char *name = format("%s/hash_daemon", conf->cache_dir);
+	unlink(name);
+	if ((res = uv_pipe_bind(&server, name))) {
+		fprintf(stderr, "Bind error %s\n", uv_err_name(res));
+		return false;
+	}
+	if ((res = uv_listen((uv_stream_t*)&server, 128, on_new_connection))) {
+		fprintf(stderr, "Listen error %s\n", uv_err_name(res));
+		return false;
+	}
+	fprintf(stderr, "hash daemon on %s\n", name);
+	free(name);
+    return uv_run(loop, UV_RUN_DEFAULT);
+}
+
+struct client_data
+{
 	struct msg msg;
+	size_t fill;
+	uv_write_t write_req;
+};
+#define CDATA(cdata, x) struct client_data *cdata = (struct client_data *)x->data
 
-	memset(&hdr, 0, sizeof(hdr));
-	memset(&msg, 0, sizeof(msg));
-	iov.iov_base = &msg;
-	iov.iov_len = sizeof(msg);
-	hdr.msg_iov = &iov;
-	hdr.msg_iovlen = 1;
-	memset(&addr, 0, sizeof(addr));
+static void client_buffer(uv_handle_t *stream, size_t suggested_size, uv_buf_t *buf) {
+	CDATA(client, stream);
+	(void)suggested_size;
+	fprintf(stderr, "client_buffer: fill=%u\n", (unsigned)client->fill);
+	char *p = (char *)&client->msg + client->fill;
+	*buf = uv_buf_init(p, sizeof(struct msg) - client->fill);
+}
 
-	time_t last_stat = time(NULL);
+static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
+	extern struct conf *conf;
+	CDATA(client, stream);
 
-	while ((addrlen = sizeof(addr), res = recvfrom(s, &msg, sizeof(msg), 0, &addr, &addrlen)) > 0) {
-		assert(addr.sun_family == AF_UNIX);
-		//fprintf(stderr, "addr=%s addrlen=%d\n", addr.sun_path, addrlen);
-		if (!s_cmd(&msg, conf))
-		{
-			continue;
-		}
-		int n = 5;
-		while (n--) {
-			res = sendto(s, &msg, sizeof(msg), MSG_DONTWAIT, &addr, addrlen);
-			if (res > 0)
-				break;
-			else if (errno != EAGAIN) {
-				perror("sendto");
-				break;
+	if (nread < 0) {
+		fprintf(stderr, "read_cb: nread=%d (%s)\n", (int)nread, uv_err_name(nread));
+		uv_close((uv_handle_t*)stream, 0);
+		return;
+	}
+
+	fprintf(stderr, "read_cb: %ld bytes read\n", (unsigned long)nread);
+
+	(void)buf;
+	client->fill += nread;
+	if (client->fill == sizeof(struct msg)) {
+		client->fill = 0;
+		fprintf(stderr, "read_cb: message complete: cmd=%u\n", client->msg.cmd);
+		if (s_cmd(&client->msg, conf)) {
+			uv_buf_t buf = uv_buf_init((char *)&client->msg, sizeof(struct msg));
+			int res = uv_write(&client->write_req, stream, &buf, 1, write_cb);
+			if (res != 0) {
+				fprintf(stderr, "read_cb: write res=%d (%s)\n", res, uv_err_name(res));
+				uv_close((uv_handle_t*)stream, 0);
+				return;
 			}
-		}
-		if (res < 0) continue;
-
-		if (last_stat != time(NULL)) {
-			time(&last_stat);
-			fprintf(stderr, "cache hit/miss: %u/%u\n", hash_hits, hash_misses);
+			uv_read_stop(stream);
+		} else {
+			fprintf(stderr, "read_cb: no reply for %u\n", client->msg.cmd);
 		}
 	}
-	perror("accept");
-	return false;
+}
+
+static void write_cb(uv_write_t* req, int status) {
+	uv_stream_t *stream = req->handle;
+
+	fprintf(stderr, "write_cb: status=%d (%s)\n", status, uv_err_name(status));
+
+	if (status) {
+		uv_close((uv_handle_t*)stream, NULL);
+		return;
+	}
+
+	if (last_stat != time(NULL)) {
+		time(&last_stat);
+		fprintf(stderr, "cache hit/miss: %u/%u\n", hash_hits, hash_misses);
+	}
+
+	uv_read_start(stream, client_buffer, read_cb);
+}
+
+static void close_client(uv_handle_t* handle) {
+	free(handle->data);
+	//free(handle);
+}
+
+void on_new_connection(uv_stream_t *server, int status) {
+    if (status == -1) {
+        // error!
+        return;
+    }
+
+	fprintf(stderr, "new connection\n");
+
+    uv_pipe_t *client = (uv_pipe_t*) malloc(sizeof(uv_pipe_t));
+    uv_pipe_init(loop, client, 0);
+	client->data = calloc(1, sizeof(struct client_data));
+	client->close_cb = close_client;
+    if (uv_accept(server, (uv_stream_t*) client) == 0) {
+		uv_read_start((uv_stream_t*)client, client_buffer, read_cb);
+    } else {
+        uv_close((uv_handle_t*) client, NULL);
+		// Does this free client?
+    }
+}
+
+ssize_t writeall(int fd, const void *buf, size_t count)
+{
+	size_t written = 0;
+	while (written < count) {
+		ssize_t res = write(fd, (char *)buf + written, count - written);
+		if (res > 0) {
+			written += res;
+		} else {
+			return res;
+		}
+	}
+	return written;
+}
+
+ssize_t readall(int fd, void *buf, const size_t count)
+{
+	size_t nread = 0;
+	while (nread < count) {
+		ssize_t res = read(fd, (char *)buf + nread, count - nread);
+		if (res > 0) {
+			nread += res;
+		} else {
+			return res;
+		}
+	}
+	return nread;
 }
 
 bool
 c_cmd(int fd, struct msg *msg)
 {
-	int res;
-	struct iovec iov;
-	struct msghdr hdr;
-
-	memset(&hdr, 0, sizeof(hdr));
-	iov.iov_base = msg;
-	iov.iov_len = sizeof(struct msg);
-	hdr.msg_iov = &iov;
-	hdr.msg_iovlen = 1;
-	res = sendmsg(fd, &hdr, 0);
-	if (res < 0) return false;
-	unsigned t = 1;
-	unsigned n = 0;
-	do
-	{
-		res = recvmsg(fd, &hdr, 0);
-		if (res > 0) return true;
-		if (errno != EAGAIN) { perror("recvmsg"); return false; }
-		usleep(t);
-		t *= 2;
+	ssize_t res = writeall(fd, msg, sizeof(struct msg));
+	if (res <= 0) {
+		return false;
 	}
-	while (n++ < 10);
-	// TODO Record with statistics code
-	fprintf(stderr, "hash-daemon didn't respond, hashing locally\n");
-	return false;
+
+	res = readall(fd, msg, sizeof(struct msg));
+	if (res <= 0) {
+		fprintf(stderr, "hash-daemon didn't respond, hashing locally\n");
+		return false;
+	}
+	return true;
 }
 
 static int hash_daemon_fd;
@@ -523,7 +598,7 @@ bool init_hash_client(struct conf *conf)
 	// bytes.
 	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/hash_daemon", conf->cache_dir);
 	//fprintf(stderr, "hash daemon on %s\n", addr.sun_path);
-	s = socket(AF_UNIX, SOCK_DGRAM, 0);
+	s = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (s <= 0) {
 		perror_die("socket");
 		return false;
@@ -531,15 +606,6 @@ bool init_hash_client(struct conf *conf)
 	res = connect(s, &addr, sizeof(addr));
 	if (res < 0) {
 		perror_die("connect");
-	}
-#if 0
-	strcpy(addr.sun_path, "/tmp/ccache.XXXXXX");
-	mkstemp(addr.sun_path);
-	unlink(addr.sun_path);
-#endif
-	res = bind(s, &addr, sizeof(sa_family_t)); // Linux-specific: autobind feature
-	if (res < 0) {
-		perror_die("bind");
 	}
 	hash_daemon_fd = s;
 	return true;
@@ -561,6 +627,7 @@ hash_file_raw(const char *fname, unsigned char *buf)
 		// doesn't. May need to explicitly involve current_working_dir.
 		//extern char *current_working_dir;
 		struct msg msg;
+		memset(&msg, 0, sizeof(struct msg));
 		msg.cmd = CMD_HASH_FILE;
 		strcpy(msg.path, real_path);
 		if (init_hash_client(conf) && c_cmd(hash_daemon_fd, &msg))
@@ -585,10 +652,11 @@ hash_file_raw(const char *fname, unsigned char *buf)
 	if (res && conf->use_hash_daemon && init_hash_client(conf))
 	{
 		struct msg msg;
+		memset(&msg, 0, sizeof(struct msg));
 		msg.cmd = CMD_ADD_HASH;
 		strcpy(msg.add_hash.path, real_path);
 		memcpy(msg.add_hash.hash, buf, 16);
-		send(hash_daemon_fd, &msg, sizeof(msg), 0);
+		writeall(hash_daemon_fd, &msg, sizeof(msg));
 	}
 out:
 	if (fd != -1) close(fd);
