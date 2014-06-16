@@ -456,7 +456,7 @@ struct client_data
 static void client_buffer(uv_handle_t *stream, size_t suggested_size, uv_buf_t *buf) {
 	CDATA(client, stream);
 	(void)suggested_size;
-	fprintf(stderr, "client_buffer: fill=%u\n", (unsigned)client->fill);
+	//fprintf(stderr, "client_buffer: fill=%u\n", (unsigned)client->fill);
 	char *p = (char *)&client->msg + client->fill;
 	*buf = uv_buf_init(p, sizeof(struct msg) - client->fill);
 }
@@ -466,29 +466,29 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 	CDATA(client, stream);
 
 	if (nread < 0) {
-		fprintf(stderr, "read_cb: nread=%d (%s)\n", (int)nread, uv_err_name(nread));
+		//fprintf(stderr, "read_cb: nread=%d (%s)\n", (int)nread, uv_err_name(nread));
 		uv_close((uv_handle_t*)stream, 0);
 		return;
 	}
 
-	fprintf(stderr, "read_cb: %ld bytes read\n", (unsigned long)nread);
+	//fprintf(stderr, "read_cb: %ld bytes read\n", (unsigned long)nread);
 
 	(void)buf;
 	client->fill += nread;
 	if (client->fill == sizeof(struct msg)) {
 		client->fill = 0;
-		fprintf(stderr, "read_cb: message complete: cmd=%u\n", client->msg.cmd);
+		//fprintf(stderr, "read_cb: message complete: cmd=%u\n", client->msg.cmd);
 		if (s_cmd(&client->msg, conf)) {
 			uv_buf_t buf = uv_buf_init((char *)&client->msg, sizeof(struct msg));
 			int res = uv_write(&client->write_req, stream, &buf, 1, write_cb);
 			if (res != 0) {
-				fprintf(stderr, "read_cb: write res=%d (%s)\n", res, uv_err_name(res));
+				//fprintf(stderr, "read_cb: write res=%d (%s)\n", res, uv_err_name(res));
 				uv_close((uv_handle_t*)stream, 0);
 				return;
 			}
 			uv_read_stop(stream);
 		} else {
-			fprintf(stderr, "read_cb: no reply for %u\n", client->msg.cmd);
+			//fprintf(stderr, "read_cb: no reply for %u\n", client->msg.cmd);
 		}
 	}
 }
@@ -496,7 +496,7 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 static void write_cb(uv_write_t* req, int status) {
 	uv_stream_t *stream = req->handle;
 
-	fprintf(stderr, "write_cb: status=%d (%s)\n", status, uv_err_name(status));
+	//fprintf(stderr, "write_cb: status=%d (%s)\n", status, uv_err_name(status));
 
 	if (status) {
 		uv_close((uv_handle_t*)stream, NULL);
@@ -522,7 +522,7 @@ void on_new_connection(uv_stream_t *server, int status) {
         return;
     }
 
-	fprintf(stderr, "new connection\n");
+	//fprintf(stderr, "new connection\n");
 
     uv_pipe_t *client = (uv_pipe_t*) malloc(sizeof(uv_pipe_t));
     uv_pipe_init(loop, client, 0);
