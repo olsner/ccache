@@ -603,7 +603,7 @@ bool init_hash_client(struct conf *conf)
 		perror_die("socket");
 		return false;
 	}
-	res = connect(s, &addr, sizeof(addr));
+	res = connect(s, (struct sockaddr *)&addr, sizeof(addr));
 	if (res < 0) {
 		perror_die("connect");
 	}
