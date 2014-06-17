@@ -191,6 +191,9 @@ verify_dir_levels(void *value, char **errmsg)
 #define ITEM_V(name, type, verification) \
 	parse_##type, offsetof(struct conf, name), verify_##verification
 
+static const struct conf_item *
+confitems_get (register const char *str, register unsigned int len);
+
 #include "confitems_lookup.c"
 #include "envtoconfitems_lookup.c"
 
