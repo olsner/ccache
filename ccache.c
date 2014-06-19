@@ -2235,7 +2235,7 @@ cc_process_args(struct args *args, struct args **preprocessor_args,
 		using_precompiled_header = true;
 		if (!(conf->sloppiness & SLOPPY_PCH_DEFINES)
 		    || !(conf->sloppiness & SLOPPY_TIME_MACROS)) {
-			cc_log("You have to specify \"time_macros\" sloppiness when using"
+			cc_log("You have to specify \"pch_defines,time_macros\" sloppinesses when using"
 			       " precompiled headers to get direct hits");
 			cc_log("Disabling direct mode");
 			stats_update(STATS_CANTUSEPCH);
